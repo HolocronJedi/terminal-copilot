@@ -15,7 +15,9 @@ On each check:
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
+import platform
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -57,20 +59,44 @@ def _rules() -> dict:
     return _rules_cache
 
 
+def _host_safe_names(rules: dict) -> set[str]:
+    host = platform.system().lower()
+    base = {str(n).lower() for n in rules.get("safe_linux_names", [])}
+    if host == "darwin":
+        base.update(str(n).lower() for n in rules.get("safe_macos_names", []))
+    return base
+
+
 def _iter_processes() -> Iterable[ProcInfo]:
     """Yield ProcInfo for current processes using ps."""
+    out = ""
+    ps_bin = shutil.which("ps") or "/bin/ps"
     try:
-        out = subprocess.run(
-            ["ps", "-eo", "pid,user,comm,args", "--no-headers"],
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout
+        # Try portable variants first; macOS does not support GNU --no-headers.
+        ps_cmds = [
+            [ps_bin, "-axo", "pid=,user=,comm=,command="],
+            [ps_bin, "-eo", "pid=,user=,comm=,args="],
+            [ps_bin, "-eo", "pid,user,comm,args", "--no-headers"],
+            ["/bin/ps", "-axo", "pid=,user=,comm=,command="],
+            ["/bin/ps", "-eo", "pid=,user=,comm=,args="],
+        ]
+        for cmd in ps_cmds:
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                out = res.stdout
+                break
     except Exception:
+        return []
+    if not out:
         return []
 
     rules = _rules()
-    safe_names = {n.lower() for n in rules.get("safe_linux_names", [])}
+    safe_names = _host_safe_names(rules)
     installed_prefixes = rules.get("installed_app_paths_prefix", [])
     suspicious_cmd_patterns = [
         re.compile(p, re.I)
@@ -198,7 +224,7 @@ def classify_ps_output(text: str) -> list[ProcInfo]:
     the user run whatever ps flags they like and still get categorization.
     """
     rules = _rules()
-    safe_names = {n.lower() for n in rules.get("safe_linux_names", [])}
+    safe_names = _host_safe_names(rules)
     installed_prefixes = rules.get("installed_app_paths_prefix", [])
     suspicious_cmd_patterns = [
         re.compile(p, re.I) for p in rules.get("suspicious_cmdline_patterns", [])

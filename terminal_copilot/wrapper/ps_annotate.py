@@ -1,9 +1,8 @@
 """
 Annotate arbitrary `ps` command output with terminal-copilot categories.
 
-Reads ps output from stdin and prints:
-- normal process list lines with a category prefix on the far left
-- a grouped summary at the bottom for unknown/potentially_malicious/malicious
+Reads ps output from stdin and prints normal process list lines with a
+category prefix on the far left.
 """
 from __future__ import annotations
 
@@ -18,7 +17,7 @@ COLOUR = {
     "installed_app": "\033[34m",
     "potentially_malicious": "\033[33m",
     "malicious": "\033[31m",
-    "unknown": "",
+    "unknown": "\033[90m",
 }
 
 FLAG = {
@@ -30,9 +29,6 @@ FLAG = {
 }
 
 RESET = "\033[0m"
-GROUPED = ("unknown", "potentially_malicious", "malicious")
-
-
 def _category_by_pid() -> dict[int, str]:
     out: dict[int, str] = {}
     for p in _iter_processes():
@@ -49,11 +45,11 @@ def _format_prefix(category: str) -> str:
     return f"{colour}{flag}{RESET}"
 
 
-def _annotate_lines(raw: str) -> tuple[list[str], dict[str, list[str]]]:
+def _annotate_lines(raw: str) -> list[str]:
     pid_map = _category_by_pid()
     lines = raw.splitlines()
     if not lines:
-        return [], {k: [] for k in GROUPED}
+        return []
 
     # Try to locate PID column from a header line.
     pid_col = None
@@ -68,7 +64,6 @@ def _annotate_lines(raw: str) -> tuple[list[str], dict[str, list[str]]]:
             header_idx = idx
             break
 
-    grouped: dict[str, list[str]] = {k: [] for k in GROUPED}
     out_lines: list[str] = []
 
     for idx, line in enumerate(lines):
@@ -93,29 +88,15 @@ def _annotate_lines(raw: str) -> tuple[list[str], dict[str, list[str]]]:
         prefix = _format_prefix(category)
         annotated = f"{prefix} {line}"
         out_lines.append(annotated)
-        if category in grouped:
-            grouped[category].append(annotated)
 
-    return out_lines, grouped
+    return out_lines
 
 
 def annotate_ps_output(raw: str) -> str:
-    annotated, grouped = _annotate_lines(raw)
+    annotated = _annotate_lines(raw)
     if not annotated:
         return ""
-    out = ["\n".join(annotated).rstrip()]
-
-    if any(grouped.values()):
-        out.append("")
-        out.append("[tc] Grouped review:")
-        for cat in GROUPED:
-            rows = grouped[cat]
-            if not rows:
-                continue
-            out.append(f"{_format_prefix(cat)}")
-            out.extend(rows)
-
-    return "\n".join(out).rstrip() + "\n"
+    return "\n".join(annotated).rstrip() + "\n"
 
 
 def main() -> int:

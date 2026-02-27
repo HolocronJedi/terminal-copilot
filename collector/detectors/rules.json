@@ -11,6 +11,13 @@
     "login", "bash", "zsh", "sh", "sudo", "init", "launchd", "kernel_task",
     "notifyd", "logd", "opendirectoryd", "runningboardd", "distnoted", "cfprefsd"
   ],
+  "safe_macos_names": [
+    "launchd", "kernel_task", "kextd", "taskgated", "notifyd", "logd", "syslogd",
+    "opendirectoryd", "configd", "distnoted", "cfprefsd", "runningboardd",
+    "securityd", "powerd", "sandboxd", "trustd", "coreservicesd", "loginwindow",
+    "UserEventAgent", "WindowServer", "Finder", "Dock", "mds", "mdworker",
+    "fseventsd", "hidd", "tccd", "locationd", "airportd", "bluetoothd", "coreaudiod"
+  ],
   "safe_windows_paths_prefix": [
     "C:\\Windows\\System32\\",
     "C:\\Windows\\SysWOW64\\",
@@ -55,10 +62,12 @@
     "downloadstring",
     "curl | sh",
     "wget | sh",
-    "/dev/tcp/"
+    "/dev/tcp/",
+    "python"
   ],
   "malicious_cmdline_patterns": [
-    "nc -nvlp"
+    "nc ",
+    "31337"
   ],
   "network_suspicious_ports": [4444, 1337, 31337, 6667],
   "weights": {
