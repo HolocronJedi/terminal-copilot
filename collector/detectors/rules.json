@@ -42,7 +42,10 @@
     "wget | sh",
     "/dev/tcp/"
   ],
-  "network_suspicious_ports": [ 4444, 1337, 31337, 6667 ],
+  "malicious_cmdline_patterns": [
+    "nc -nvlp"
+  ],
+  "network_suspicious_ports": [4444, 1337, 31337, 6667],
   "weights": {
     "suspicious_path": 30,
     "unsigned_in_systemish": 25,
