@@ -11,6 +11,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Callable
 
+from .help_menu import render_help_menu
 from .ring_buffer import RingBuffer
 
 
@@ -37,6 +38,14 @@ def _find_shell() -> str:
     shell = os.environ.get("SHELL", "sh")
     path = shutil.which(shell)
     return path or shell
+
+
+def _is_help_command(data: bytes) -> bool:
+    try:
+        text = data.decode("utf-8", errors="replace")
+    except Exception:
+        return False
+    return text.strip() == "help"
 
 
 def _ensure_bashrc_tc_prompt() -> None:
@@ -72,6 +81,43 @@ def _ensure_bashrc_tc_prompt() -> None:
         return
 
 
+def _ensure_bashrc_tc_help() -> None:
+    """
+    Ensure the user's ~/.bashrc contains a TC_CONTEXT-aware help override.
+    With no args, `help` shows terminal-copilot menu; with args, it falls
+    back to bash builtin help.
+    """
+    bashrc = os.path.expanduser("~/.bashrc")
+    snippet_tag = "# terminal-copilot help integration"
+    snippet = (
+        snippet_tag
+        + "\n"
+        + 'if [[ -n "$TC_CONTEXT" ]]; then\n'
+        + "  help() {\n"
+        + "    if [[ $# -eq 0 ]]; then\n"
+        + '      printf "%s\\n" "$TC_HELP_MENU"\n'
+        + "      return 0\n"
+        + "    fi\n"
+        + '    builtin help "$@"\n'
+        + "  }\n"
+        + "fi\n"
+    )
+    try:
+        try:
+            with open(bashrc, "r", encoding="utf-8") as f:
+                content = f.read()
+        except FileNotFoundError:
+            content = ""
+        if snippet_tag in content:
+            return
+        with open(bashrc, "a", encoding="utf-8") as f:
+            if content and not content.endswith("\n"):
+                f.write("\n")
+            f.write("\n" + snippet + "\n")
+    except OSError:
+        return
+
+
 def run_wrapped_shell(
     *,
     shell: str | None = None,
@@ -90,6 +136,7 @@ def run_wrapped_shell(
     # Best-effort: make sure the user's bashrc has a TC_CONTEXT-aware prompt
     # snippet so we can show [tc] in the inner shell prompt automatically.
     _ensure_bashrc_tc_prompt()
+    _ensure_bashrc_tc_help()
     buf_out = RingBuffer(max_lines=output_line_limit, max_bytes=output_tail_bytes)
     buf_in: list[str] = []
     last_insight_check = 0.0
@@ -151,6 +198,11 @@ def run_wrapped_shell(
         if not data:
             return b""
 
+        if _is_help_command(data):
+            buf_in.append("help")
+            print("\r\n" + render_help_menu() + "\r\n", file=sys.stderr, flush=True)
+            return b"\n"
+
         try:
             text = data.decode("utf-8", errors="replace")
         except Exception:
@@ -164,7 +216,9 @@ def run_wrapped_shell(
     # Mark this PTY as a terminal-copilot context so shell config (e.g. ~/.bashrc)
     # can adjust the prompt (PS1) accordingly.
     orig_tc = os.environ.get("TC_CONTEXT")
+    orig_help = os.environ.get("TC_HELP_MENU")
     os.environ["TC_CONTEXT"] = "1"
+    os.environ["TC_HELP_MENU"] = render_help_menu()
 
     # Optional one-time header so it's obvious when you enter the wrapped shell.
     user = os.environ.get("USER") or os.environ.get("LOGNAME") or "?"
@@ -185,6 +239,10 @@ def run_wrapped_shell(
             os.environ.pop("TC_CONTEXT", None)
         else:
             os.environ["TC_CONTEXT"] = orig_tc
+        if orig_help is None:
+            os.environ.pop("TC_HELP_MENU", None)
+        else:
+            os.environ["TC_HELP_MENU"] = orig_help
 
     # pty.spawn returns wait status from os.waitpid; convert to exit code.
     try:

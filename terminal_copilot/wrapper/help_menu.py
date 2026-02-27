@@ -1,0 +1,80 @@
+"""
+Help menu generation for the interactive terminal-copilot shell context.
+"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parent.parent.parent
+
+
+def _iter_custom_locations() -> list[Path]:
+    roots: list[Path] = []
+
+    env_paths = os.environ.get("TC_MODULE_PATHS", "").strip()
+    if env_paths:
+        for raw in env_paths.split(os.pathsep):
+            p = Path(raw).expanduser()
+            if p.exists() and p.is_dir():
+                roots.append(p.resolve())
+
+    for candidate in (
+        Path.cwd() / "modules",
+        Path.cwd() / "scripts",
+        _project_root() / "modules",
+        _project_root() / "scripts",
+    ):
+        if candidate.exists() and candidate.is_dir():
+            rp = candidate.resolve()
+            if rp not in roots:
+                roots.append(rp)
+    return roots
+
+
+def _discover_custom_entries() -> list[tuple[str, str, str]]:
+    entries: list[tuple[str, str, str]] = []
+    for root in _iter_custom_locations():
+        for child in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+            if child.name.startswith(".") or child.name.startswith("_"):
+                continue
+            if child.is_file() and child.suffix == ".py":
+                entries.append(("python-module", child.stem, str(child)))
+                continue
+            if child.is_file() and os.access(child, os.X_OK):
+                entries.append(("script", child.name, str(child)))
+    return entries
+
+
+def render_help_menu() -> str:
+    builtins = [
+        ("combined_insights", "Rule-based + optional AI insights"),
+        ("rule_based_insights", "Local process/rule heuristic insights"),
+        ("ai_insights", "AI-backed insights (when API keys are set)"),
+    ]
+    custom = _discover_custom_entries()
+
+    lines: list[str] = []
+    lines.append("[tc] terminal-copilot help")
+    lines.append("")
+    lines.append("Built-in modules:")
+    for name, desc in builtins:
+        lines.append(f"  - {name}: {desc}")
+
+    lines.append("")
+    lines.append("Custom modules/scripts:")
+    if custom:
+        for kind, name, path in custom:
+            lines.append(f"  - {name} ({kind}) -> {path}")
+    else:
+        lines.append("  - none found")
+
+    lines.append("")
+    lines.append("Discovery locations:")
+    lines.append("  - $TC_MODULE_PATHS (os.pathsep-separated)")
+    lines.append("  - ./modules, ./scripts")
+    lines.append("")
+    lines.append('Type "help" any time in this wrapped shell to see this menu again.')
+    return "\n".join(lines)

@@ -30,6 +30,9 @@ python3 -m terminal_copilot
 python3 -m terminal_copilot --shell /bin/zsh --debounce 1.0
 ```
 
+Inside the wrapped shell, type `help` to print the terminal-copilot module menu
+(built-in insight modules plus discovered custom scripts/modules).
+
 Insights are shown as:
 
 - **Desktop notifications** (if `notify-send` is available).
@@ -53,6 +56,7 @@ Insights are shown as:
 | `ANTHROPIC_API_KEY` | Enable Anthropic-based insights. |
 | `TC_OPENAI_MODEL` | OpenAI model (default `gpt-4o-mini`). |
 | `TC_ANTHROPIC_MODEL` | Anthropic model (default `claude-3-5-haiku-20241022`). |
+| `TC_MODULE_PATHS` | Optional additional module/script directories (separated by `:` on Unix). |
 
 ---
 
