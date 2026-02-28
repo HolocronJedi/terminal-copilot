@@ -41,6 +41,20 @@ Inside the wrapped shell, `ss` and `netstat` are also wrapped so connection
 rows are prefixed with the same categories, with listening/suspicious-port
 rows highlighted.
 
+Inside the wrapped shell, `tc runfile` lets you execute a newline-separated
+command list from a **local** text file:
+
+- `tc runfile` prompts for a local path.
+- `tc runfile /path/to/commands.txt` runs immediately.
+- Each command is shown before execution with confirmation:
+  - `y` / `yes`: run command
+  - `n`, empty input, or anything else: skip command (default No)
+  - `x` / `exit`: stop remaining commands and return to normal prompt
+
+The file is read by terminal-copilot on your local machine and each command is
+then sent to the active shell context. If you are currently inside SSH, those
+commands execute in that remote session, but the file itself is never uploaded.
+
 Insights are shown as:
 
 - **Desktop notifications** (if `notify-send` is available).

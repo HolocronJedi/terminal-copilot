@@ -67,7 +67,8 @@
   ],
   "malicious_cmdline_patterns": [
     "nc ",
-    "31337"
+    "31337",
+    "<defunct>"
   ],
   "network_suspicious_ports": [4444, 1337, 31337, 6667],
   "weights": {

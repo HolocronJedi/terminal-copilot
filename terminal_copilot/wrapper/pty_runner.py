@@ -11,6 +11,11 @@ import sys
 from dataclasses import dataclass, field
 from typing import Callable
 
+from .command_batch import (
+    encode_commands,
+    load_commands_from_file,
+    parse_batch_invocation,
+)
 from .help_menu import render_help_menu
 from .ring_buffer import RingBuffer
 
@@ -46,6 +51,12 @@ def _is_help_command(data: bytes) -> bool:
     except Exception:
         return False
     return text.strip() == "help"
+
+
+def _print_tc_message(message: str) -> None:
+    # Use CRLF so output always starts at column 0 in interactive PTY sessions.
+    sys.stderr.write(f"\r\n[tc] {message}\r\n")
+    sys.stderr.flush()
 
 
 def _ensure_bashrc_tc_prompt() -> None:
@@ -243,6 +254,24 @@ def run_wrapped_shell(
     buf_in: list[str] = []
     last_insight_check = 0.0
     import time
+    awaiting_batch_path = False
+    pending_batch_commands: list[str] = []
+    pending_batch_source = ""
+    typed_line = ""
+    in_escape_sequence = False
+
+    def _prompt_next_batch_command() -> None:
+        if not pending_batch_commands:
+            _print_tc_message("Command batch finished.")
+            return
+        total = len(pending_batch_commands)
+        cmd = pending_batch_commands[0]
+        sys.stderr.write(
+            f"\r\n[tc] Next command from '{pending_batch_source}' ({total} remaining):"
+            f"\r\n[tc] $ {cmd}"
+            "\r\n[tc] Run it? [y]es / [N]o / [x] exit: "
+        )
+        sys.stderr.flush()
 
     def make_context() -> TerminalContext:
         return TerminalContext(
@@ -298,6 +327,7 @@ def run_wrapped_shell(
 
     def stdin_read(fd: int) -> bytes:
         """Read from our stdin, track commands, and pass through."""
+        nonlocal awaiting_batch_path, typed_line, in_escape_sequence
         try:
             data = os.read(fd, 4096)
         except OSError:
@@ -314,11 +344,128 @@ def run_wrapped_shell(
             text = data.decode("utf-8", errors="replace")
         except Exception:
             text = ""
+
+        def handle_submitted_line(line: str) -> bytes | None:
+            nonlocal awaiting_batch_path, pending_batch_source
+            if awaiting_batch_path:
+                local_path = line.strip()
+                if not local_path:
+                    _print_tc_message("Path is empty. Enter local command file path:")
+                    return b""
+                try:
+                    resolved_path, commands = load_commands_from_file(local_path)
+                except OSError as e:
+                    _print_tc_message(f"Unable to read local file '{local_path}': {e}")
+                    _print_tc_message("Enter local command file path:")
+                    return b""
+                awaiting_batch_path = False
+                if not commands:
+                    _print_tc_message(f"No commands found in '{resolved_path}'.")
+                    return b""
+                pending_batch_source = resolved_path
+                pending_batch_commands.clear()
+                pending_batch_commands.extend(commands)
+                _print_tc_message(
+                    f"Loaded {len(commands)} command(s) from '{resolved_path}'."
+                )
+                _prompt_next_batch_command()
+                return b""
+
+            if pending_batch_commands:
+                response = line.strip().lower()
+                if response in ("x", "exit"):
+                    pending_batch_commands.clear()
+                    _print_tc_message("Stopped remaining commands and returned to prompt.")
+                    return b""
+                if response in ("y", "yes"):
+                    command = pending_batch_commands.pop(0)
+                    buf_in.append(command)
+                    if pending_batch_commands:
+                        _prompt_next_batch_command()
+                    return encode_commands([command])
+
+                # Default to No when blank or unrecognized input.
+                skipped = pending_batch_commands.pop(0)
+                _print_tc_message(f"Skipped: {skipped}")
+                if pending_batch_commands:
+                    _prompt_next_batch_command()
+                else:
+                    _print_tc_message("No remaining commands in batch.")
+                return b""
+
+            invocation = parse_batch_invocation(line)
+            if not invocation.recognized:
+                return None
+            if invocation.parse_error:
+                _print_tc_message(
+                    f"Invalid tc runfile syntax: {invocation.parse_error}"
+                )
+                return b""
+            if invocation.inline_path is None:
+                awaiting_batch_path = True
+                _print_tc_message("Enter local command file path:")
+                return b""
+            try:
+                resolved_path, commands = load_commands_from_file(invocation.inline_path)
+            except OSError as e:
+                _print_tc_message(
+                    f"Unable to read local file '{invocation.inline_path}': {e}"
+                )
+                return b""
+            if not commands:
+                _print_tc_message(f"No commands found in '{resolved_path}'.")
+                return b""
+            pending_batch_source = resolved_path
+            pending_batch_commands.clear()
+            pending_batch_commands.extend(commands)
+            _print_tc_message(
+                f"Loaded {len(commands)} command(s) from '{resolved_path}'."
+            )
+            _prompt_next_batch_command()
+            return b""
+
+        passthrough = bytearray()
+        injected = bytearray()
+        current_line_start = 0
+        for b in data:
+            passthrough.append(b)
+
+            if in_escape_sequence:
+                if 0x40 <= b <= 0x7E:
+                    in_escape_sequence = False
+                continue
+            if b == 0x1B:
+                in_escape_sequence = True
+                continue
+
+            if b in (0x0A, 0x0D):
+                submitted = typed_line
+                typed_line = ""
+                action = handle_submitted_line(submitted)
+                if action is not None:
+                    # Intercepted line: do not pass the typed line (or newline)
+                    # through to the shell.
+                    del passthrough[current_line_start:]
+                    injected.extend(b"\x15")
+                    injected.extend(action)
+                    current_line_start = len(passthrough)
+                else:
+                    current_line_start = len(passthrough)
+                continue
+
+            if b in (0x08, 0x7F):
+                typed_line = typed_line[:-1]
+                continue
+            if 32 <= b <= 126:
+                typed_line += chr(b)
+
         for line in text.splitlines():
             line = line.strip()
             if line and not line.isspace():
                 buf_in.append(line)
-        return data
+        if injected:
+            return bytes(passthrough) + bytes(injected)
+        return bytes(passthrough)
 
     # Mark this PTY as a terminal-copilot context so shell config (e.g. ~/.bashrc)
     # can adjust the prompt (PS1) accordingly.
