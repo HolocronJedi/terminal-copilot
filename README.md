@@ -26,6 +26,7 @@ It can:
 - Monitor typed commands and shell output.
 - Surface rule-based and optional AI insights.
 - Wrap `ps`, `ss`, and `netstat` output with quick risk categories.
+- Classify Windows `tasklist` output even in remote sessions (for example `evil-winrm`, SSH).
 - Execute newline-separated command batches from a local file with `tc runfile`.
 
 The wrapped shell works in local and SSH workflows. For `tc runfile`, the file is read locally and only command text is sent to the active terminal session.
@@ -88,6 +89,8 @@ python3 -m terminal_copilot [--no-ai] [--shell SHELL] [--debounce SECONDS]
 - `tc runfile <path>`: Load commands from provided local path.
 - `tc runlist`: Alias for `tc runfile`.
 - `ps`, `ss`, `netstat`: Wrapped output with category prefixes.
+- `tasklist`, `Get-Process`, `wmic process ...`: Classified from captured output
+  (including remote Windows sessions such as `evil-winrm`/SSH).
 
 ### Help output (example)
 
@@ -145,3 +148,6 @@ Batch command execution:
 - No AI insights appear:
   - Expected with `--no-ai`.
   - Without `--no-ai`, set `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
+- `[tc]` prompt/header seems missing inside `evil-winrm` or SSH-to-Windows:
+  - Remote interactive clients render their own prompt, so local bash prompt markers are not shown there.
+  - tc monitoring still runs, and `tasklist` classification now comes from captured output context.

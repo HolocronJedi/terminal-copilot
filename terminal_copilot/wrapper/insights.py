@@ -46,10 +46,17 @@ def notify_insight(insight: Insight) -> None:
     prefix = {"info": "\033[36m[tc]\033[0m", "warning": "\033[33m[tc]\033[0m", "danger": "\033[31m[tc]\033[0m"}.get(
         insight.level, "\033[36m[tc]\033[0m"
     )
+    if insight.title == "Windows process classification" and insight.body:
+        # Render categorized rows directly for better terminal readability.
+        sys.stderr.write("\r\n" + insight.body.rstrip() + "\r\n")
+        sys.stderr.flush()
+        return
+
     banner = f"\r\n{prefix} {insight.title}"
     if insight.body:
-        banner += f"\n     {insight.body}"
+        banner += f"\r\n     {insight.body}"
     for cmd in insight.commands:
-        banner += f"\n     \033[32m$ {cmd}\033[0m"
-    banner += "\n"
-    print(banner, file=sys.stderr, flush=True)
+        banner += f"\r\n     \033[32m$ {cmd}\033[0m"
+    banner += "\r\n"
+    sys.stderr.write(banner)
+    sys.stderr.flush()

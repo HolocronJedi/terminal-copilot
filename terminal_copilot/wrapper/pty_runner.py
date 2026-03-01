@@ -54,7 +54,6 @@ def _is_help_command(data: bytes) -> bool:
 
 
 def _print_tc_message(message: str) -> None:
-    # Use CRLF so output always starts at column 0 in interactive PTY sessions.
     sys.stderr.write(f"\r\n[tc] {message}\r\n")
     sys.stderr.flush()
 
@@ -67,11 +66,15 @@ def _ensure_bashrc_tc_prompt() -> None:
     """
     bashrc = os.path.expanduser("~/.bashrc")
     snippet_tag = "# terminal-copilot prompt integration"
+    prompt_value = (
+        '[tc] \\[\\033[01;32m\\]\\u@\\h\\[\\033[00m\\]:'
+        '\\[\\033[01;34m\\]\\w\\[\\033[00m\\]\\$ '
+    )
     snippet = (
         snippet_tag
         + "\n"
         + 'if [[ -n "$TC_CONTEXT" ]]; then\n'
-        + '  PS1="[tc] $PS1"\n'
+        + f'  PS1="{prompt_value}"\n'
         + "fi\n"
     )
     try:
@@ -81,6 +84,19 @@ def _ensure_bashrc_tc_prompt() -> None:
         except FileNotFoundError:
             content = ""
         if snippet_tag in content:
+            # Migrate older prompt snippet to safe fixed PS1 form.
+            replacements = {
+                'PS1="[tc] $PS1"': f'PS1="{prompt_value}"',
+                'PS1="[tc] \\u@\\h:\\w\\$ "': f'PS1="{prompt_value}"',
+            }
+            changed = False
+            for old, new in replacements.items():
+                if old in content:
+                    content = content.replace(old, new)
+                    changed = True
+            if changed:
+                with open(bashrc, "w", encoding="utf-8") as f:
+                    f.write(content)
             return
         with open(bashrc, "a", encoding="utf-8") as f:
             if content and not content.endswith("\n"):
@@ -286,12 +302,18 @@ def run_wrapped_shell(
             return
         ctx = make_context()
         last_cmd = (ctx.last_command() or "").strip()
-        ps_tokens = set(last_cmd.replace("|", " ").split())
-        is_ps_flow = "ps" in ps_tokens
+        cmd_tokens = {t.lower() for t in last_cmd.replace("|", " ").split()}
+        is_ps_flow = "ps" in cmd_tokens
+        is_windows_proc_flow = (
+            "tasklist" in cmd_tokens
+            or "get-process" in cmd_tokens
+            or "gps" in cmd_tokens
+            or ("wmic" in cmd_tokens and "process" in cmd_tokens)
+        )
         now = time.monotonic()
-        # For ps output classification, run checks eagerly so short-lived
-        # command output is not skipped by debounce timing.
-        if (not is_ps_flow) and (now - last_insight_check < debounce_seconds):
+        # Keep eager checks for ps and Windows process commands. The provider
+        # itself waits for prompt-return for Windows flows to avoid interleaving.
+        if (not is_ps_flow) and (not is_windows_proc_flow) and (now - last_insight_check < debounce_seconds):
             return
         last_insight_check = now
         try:
@@ -301,7 +323,8 @@ def run_wrapped_shell(
                 notify_insight(insight)
         except Exception as e:
             # Don't break the terminal; log to stderr
-            print(f"\r\n[tc] insight error: {e}\n", file=sys.stderr, flush=True)
+            sys.stderr.write(f"\r\n[tc] insight error: {e}\r\n")
+            sys.stderr.flush()
 
     def master_read(fd: int) -> bytes:
         """Read from child PTY, buffer, maybe run insights, and pass through."""
@@ -337,7 +360,8 @@ def run_wrapped_shell(
 
         if _is_help_command(data):
             buf_in.append("help")
-            print("\r\n" + render_help_menu() + "\r\n", file=sys.stderr, flush=True)
+            sys.stderr.write(f"\r\n{render_help_menu()}\r\n")
+            sys.stderr.flush()
             return b"\n"
 
         try:
@@ -450,6 +474,9 @@ def run_wrapped_shell(
                     injected.extend(action)
                     current_line_start = len(passthrough)
                 else:
+                    line = submitted.strip()
+                    if line and not line.isspace():
+                        buf_in.append(line)
                     current_line_start = len(passthrough)
                 continue
 
@@ -459,10 +486,6 @@ def run_wrapped_shell(
             if 32 <= b <= 126:
                 typed_line += chr(b)
 
-        for line in text.splitlines():
-            line = line.strip()
-            if line and not line.isspace():
-                buf_in.append(line)
         if injected:
             return bytes(passthrough) + bytes(injected)
         return bytes(passthrough)
@@ -474,17 +497,22 @@ def run_wrapped_shell(
     orig_home = os.environ.get("TC_HOME")
     orig_ps_wrapped = os.environ.get("TC_PS_WRAPPED")
     orig_py = os.environ.get("TC_PYTHON_BIN")
+    orig_columns = os.environ.get("COLUMNS")
+    orig_lines = os.environ.get("LINES")
     os.environ["TC_CONTEXT"] = "1"
     os.environ["TC_HELP_MENU"] = render_help_menu()
     os.environ["TC_HOME"] = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     os.environ["TC_PS_WRAPPED"] = "1"
     os.environ["TC_PYTHON_BIN"] = sys.executable or "python3"
+    try:
+        term_size = os.get_terminal_size(sys.stdin.fileno())
+        os.environ["COLUMNS"] = str(term_size.columns)
+        os.environ["LINES"] = str(term_size.lines)
+    except OSError:
+        pass
 
     # Optional one-time header so it's obvious when you enter the wrapped shell.
-    user = os.environ.get("USER") or os.environ.get("LOGNAME") or "?"
-    host = os.uname().nodename
-    cwd = os.getcwd()
-    print(f"[tc] Dropping into terminal-copilot shell... 🚀", file=sys.stderr, flush=True)
+    _print_tc_message("Dropping into terminal-copilot shell...")
 
     # Use pty.spawn to handle PTY setup, line discipline, and job control.
     argv = [shell, "-i"]
@@ -515,6 +543,14 @@ def run_wrapped_shell(
             os.environ.pop("TC_PYTHON_BIN", None)
         else:
             os.environ["TC_PYTHON_BIN"] = orig_py
+        if orig_columns is None:
+            os.environ.pop("COLUMNS", None)
+        else:
+            os.environ["COLUMNS"] = orig_columns
+        if orig_lines is None:
+            os.environ.pop("LINES", None)
+        else:
+            os.environ["LINES"] = orig_lines
 
     # pty.spawn returns wait status from os.waitpid; convert to exit code.
     try:
